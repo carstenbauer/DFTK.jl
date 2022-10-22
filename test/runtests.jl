@@ -105,6 +105,7 @@ Random.seed!(0)
         include("forces.jl")
         include("pairwise.jl")
         include("stresses.jl")
+        include("nlcc.jl")
     end
 
     if "all" in TAGS
