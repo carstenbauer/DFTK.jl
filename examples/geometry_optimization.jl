@@ -36,7 +36,7 @@ function compute_scfres(x)
     basis = PlaneWaveBasis(model; Ecut, kgrid)
     global ψ, ρ
     if isnothing(ρ)
-        ρ = guess_density(basis, AutoGuessDensity())
+        ρ = guess_density(basis)
     end
     scfres = self_consistent_field(basis; ψ, ρ, tol=tol / 10, callback=identity)
     ψ = scfres.ψ

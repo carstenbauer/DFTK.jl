@@ -63,7 +63,7 @@ Solve the Kohn-Sham equations with a SCF algorithm, starting at `ρ`.
 @timing function self_consistent_field(basis::PlaneWaveBasis{T};
                                        n_bands=nothing,    # TODO For backwards compatibility.
                                        n_ep_extra=nothing, # TODO For backwards compatibility.
-                                       ρ=guess_density(basis, AutoGuessDensity()),
+                                       ρ=guess_density(basis),
                                        ψ=nothing,
                                        tol=1e-6,
                                        maxiter=100,
