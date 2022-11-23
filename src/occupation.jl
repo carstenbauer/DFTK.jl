@@ -78,7 +78,7 @@ end
 
 
 function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::ZeroTemperature;
-                             temperature, smearing)
+                             temperature=nothing, smearing=nothing) where {T}
     # Sanity check that we can indeed fill the appropriate number of states
     if n_electrons % (n_spin * filled_occ) != 0
         error("$n_electrons electrons cannot be attained by filling states with " *
@@ -109,8 +109,7 @@ end
 function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues ::Bisection;
                              temperature, smearing) where {T}
     if iszero(temperature)
-        return compute_fermi_level(basis, eigenvalues, ZeroTemperature();
-                                   temperature, smearing)
+        return compute_fermi_level(basis, eigenvalues, ZeroTemperature())
     end
 
     # Get rough bounds to bracket εF
@@ -124,13 +123,17 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues ::Bisection;
     Roots.find_zero(objective, (min_ε, max_ε), Roots.Bisection(), atol=eps(T))
 end
 
-function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues ::GaussianNewton;
-                             temperature, smearing) where {T}
+function compute_fermi_level(basis::PlaneWaveBasis, eigenvalues ::GaussianNewton;
+                             temperature, smearing)
+    if iszero(temperature)
+        return compute_fermi_level(basis, eigenvalues, ZeroTemperature())
+    elseif smearing in (Smearing.Gaussian(), Smearing.FermiDirac())
+        # Monotonous smearing functions ... only one Fermi level anyway
+        return compute_fermi_level(basis, eigenvalues, Bisection(); temperature, smearing)
+    end
+
     εF_guess = compute_fermi_level(basis, eigenvalues, Bisection();
                                    temperature, smearing=Smearing.Gaussian())
-    if iszero(temperature) || smearing isa Smearing.Gaussian
-        return εF_guess
-    end
 
     n_elec(εF)  = deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature)
     dn_elec(εF) = ForwardDiff.derivative(objective, εF)
