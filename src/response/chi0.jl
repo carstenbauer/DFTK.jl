@@ -52,7 +52,7 @@ function compute_χ0(ham; temperature=ham.basis.model.temperature)
     EVs = [eigen(Hermitian(Array(Hk))) for Hk in ham.blocks]
     Es = [EV.values for EV in EVs]
     Vs = [EV.vectors for EV in EVs]
-    occ, εF = compute_occupation(basis, Es; temperature)
+    occupation, εF = compute_occupation(basis, Es; temperature)
 
     χ0 = zeros(eltype(basis), n_spin * n_fft, n_spin * n_fft)
     for (ik, kpt) in enumerate(basis.kpoints)
@@ -69,7 +69,7 @@ function compute_χ0(ham; temperature=ham.basis.model.temperature)
         Vr = reshape(Vr, n_fft, N)
         @showprogress "Computing χ0 for k-point $ik/$(length(basis.kpoints)) ..." for m = 1:N, n = 1:N
             enred = (E[n] - εF) / temperature
-            @assert occ[ik][n] ≈ filled_occ * Smearing.occupation(model.smearing, enred)
+            @assert occupation[ik][n] ≈ filled_occ * Smearing.occupation(model.smearing, enred)
             ddiff = Smearing.occupation_divided_difference
             ratio = filled_occ * ddiff(model.smearing, E[m], E[n], εF, temperature)
             # dvol because inner products have a dvol in them
@@ -248,7 +248,7 @@ end
 """
 Compute the derivatives of the occupations (and of the Fermi level).
 """
-function compute_δocc(basis, ψ, occ, εF::T, ε, δHψ) where {T}
+function compute_δocc(basis, ψ, occupation, εF::T, ε, δHψ) where {T}
     model = basis.model
     temperature = model.temperature
     smearing = model.smearing
@@ -256,7 +256,7 @@ function compute_δocc(basis, ψ, occ, εF::T, ε, δHψ) where {T}
     Nk = length(basis.kpoints)
 
     δεF = zero(T)
-    δocc = [zero(occ[ik]) for ik = 1:Nk]  # = fn' * (δεn - δεF)
+    δocc = [zero(occupation[ik]) for ik = 1:Nk]  # = fn' * (δεn - δεF)
     if temperature > 0
         # First compute δocc without self-consistent Fermi δεF.
         D = zero(T)
@@ -328,9 +328,9 @@ function compute_δψ(basis, H, ψ, εF, ε, δHψ; ψ_extra=[zeros(size(ψk,1),
     δψ
 end
 
-@views @timing function apply_χ0_4P(ham, ψ, occ, εF, eigenvalues, δHψ;
+@views @timing function apply_χ0_4P(ham, ψ, occupation, εF, eigenvalues, δHψ;
                                     occupation_threshold, kwargs_sternheimer...)
-    basis  = ham.basis
+    basis = ham.basis
 
     # We first select orbitals with occupation number higher than
     # occupation_threshold for which we compute the associated response δψn,
@@ -338,21 +338,21 @@ end
     # We then use the extra information we have from these additional bands,
     # non-necessarily converged, to split the sternheimer_solver with a Schur
     # complement.
-
-    mask_occ   = map(occk -> isless.(occupation_threshold, occk), occ)
-    mask_extra = map(occk -> (!isless).(occupation_threshold, occk), occ)
+    occ_thresh = occupation_threshold
+    mask_occ   = map(occk -> findall(occnk -> abs(occnk) ≥ occ_thresh, occk), occupation)
+    mask_extra = map(occk -> findall(occnk -> abs(occnk) < occ_thresh, occk), occupation)
 
     ψ_occ   = [ψ[ik][:, maskk] for (ik, maskk) in enumerate(mask_occ)]
     ψ_extra = [ψ[ik][:, maskk] for (ik, maskk) in enumerate(mask_extra)]
 
     ε_occ   = [eigenvalues[ik][maskk] for (ik, maskk) in enumerate(mask_occ)]
 
-    occ_occ = [occ[ik][maskk] for (ik, maskk) in enumerate(mask_occ)]
+    occ_occ = [occupation[ik][maskk] for (ik, maskk) in enumerate(mask_occ)]
 
     # First we compute δoccupation and δεF
     δocc, δεF = compute_δocc(basis, ψ_occ, occ_occ, εF, ε_occ, δHψ)
     # Pad δoccupation
-    δoccupation = zero.(occ)
+    δoccupation = zero.(occupation)
     for (ik, maskk) in enumerate(mask_occ)
         δoccupation[ik][maskk] .= δocc[ik]
     end

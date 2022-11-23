@@ -69,7 +69,8 @@ function determine_n_bands(bands::AdaptiveBands, occupation::AbstractVector,
 
     # Determine number of bands to be actually converged
     n_bands_occ = maximum(occupation) do occk
-        something(findlast(fnk -> fnk ≥ bands.occupation_threshold, occk), length(occk) + 1)
+        something(findlast(fnk -> abs(fnk) ≥ bands.occupation_threshold, occk),
+                  length(occk) + 1)
     end
     n_bands_converge = max(bands.n_bands_converge, n_bands_occ)
 
