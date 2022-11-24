@@ -17,7 +17,7 @@ struct ZeroTemperature <: FermiLevelAlgorithm end
 struct Bisection       <: FermiLevelAlgorithm end
 struct GaussianNewton  <: FermiLevelAlgorithm end
 
-function deviation_n_electrons(basis::PlaneWaveBasis, eigenvalues, εF; smearing, temperature)
+function excess_n_electrons(basis::PlaneWaveBasis, eigenvalues, εF; smearing, temperature)
     occupation = compute_occupation(basis, eigenvalues, εF;
                                     smearing, temperature).occupation
     weighted_ksum(basis, sum.(occupation)) - basis.model.n_electrons
@@ -45,14 +45,13 @@ function compute_occupation(basis::PlaneWaveBasis{T}, eigenvalues,
         εF = compute_fermi_level(basis, eigenvalues, algorithm; temperature, smearing)
 
         # Sanity check on Fermi level
-        deviation = deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature)
-        if abs(deviation) > sqrt(eps(T))
+        excess = excess_n_electrons(basis, eigenvalues, εF; smearing, temperature)
+        if abs(excess / basis.model.n_electrons) > sqrt(eps(T))
             if iszero(temperature)
                 error("Unable to find non-fractional occupations that have the " *
                       "correct number of electrons. You should add a temperature.")
             else
-                # TODO Do this properly
-                @warn "Large deviation from targeted electron count: $deviation"
+                error("This should not happen ... debug me.")
             end
         end
     end
@@ -95,7 +94,8 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::ZeroTemper
     # reached, or there are unoccupied conduction bands and we take
     # εF as the midpoint between valence and conduction bands.
     if n_fill == length(eigenvalues[1])
-        εF = max_ε
+        εF = maximum(maximum, eigenvalues) + 1
+        εF = mpi_max(εF, basis.comm_kpts)
     else
         # highest occupied energy level
         HOMO = maximum([εk[n_fill] for εk in eigenvalues])
@@ -121,24 +121,41 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::Bisection;
     max_ε = maximum(maximum, eigenvalues) + 1
     max_ε = mpi_max(max_ε, basis.comm_kpts)
 
-    objective(εF) = deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature)
-    @assert objective(min_ε) < 0 < objective(max_ε)
-    Roots.find_zero(objective, (min_ε, max_ε), Roots.Bisection(), atol=eps(T))
+    excess(εF) = excess_n_electrons(basis, eigenvalues, εF; smearing, temperature)
+    @assert excess(min_ε) < 0 < excess(max_ε)
+    Roots.find_zero(excess, (min_ε, max_ε), Roots.Bisection(), atol=eps(T))
 end
 
 function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::GaussianNewton;
                              temperature, smearing) where {T}
-    if iszero(temperature)
-        return compute_fermi_level(basis, eigenvalues, ZeroTemperature())
-    elseif smearing in (Smearing.Gaussian(), Smearing.FermiDirac())
-        # Monotonous smearing functions ... only one Fermi level anyway
-        return compute_fermi_level(basis, eigenvalues, Bisection(); temperature, smearing)
+    # Compute a guess using a monotonic smearing
+    smearing_guess = Smearing.Gaussian()
+    if smearing isa Smearing.FermiDirac
+        smearing_guess = smearing
+    end
+    εF_guess = compute_fermi_level(basis, eigenvalues, Bisection();
+                                   temperature, smearing=smearing_guess)
+
+    excess(εF)  = excess_n_electrons(basis, eigenvalues, εF; smearing, temperature)
+    dexcess(εF) = ForwardDiff.derivative(excess, εF)
+    if abs(excess(εF_guess) / basis.model.n_electrons) < sqrt(eps(T))
+        return εF_guess  # Early exit
     end
 
-    εF_guess = compute_fermi_level(basis, eigenvalues, Bisection();
-                                   temperature, smearing=Smearing.Gaussian())
-
-    deviation2(εF)  = abs2(deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature))
-    ddeviation2(εF) = ForwardDiff.derivative(deviation2, εF)
-    εF_next = Roots.find_zero((deviation2, ddeviation2), εF_guess, Roots.Newton(), atol=eps(T))
+    # Really weird ... why use quadratic here ...
+    εF = εF_guess
+    objective(εF)  = abs2(excess(εF))
+    dobjective(εF) = ForwardDiff.derivative(objective, εF)
+    try
+        εF = Roots.find_zero((objective, dobjective), εF_guess, Roots.Newton(), atol=eps(T))
+    catch e
+        (e isa Roots.ConvergenceFailed) || rethrow()
+    end
+    if abs(excess(εF) / basis.model.n_electrons) > sqrt(eps(T))
+        # If Newton has issues, fall back to bisection ...
+        @warn "Newton algorithm failed to determine Fermi level. Falling back to Bisection."
+        return compute_fermi_level(basis, eigenvalues, Bisection(); temperature, smearing)
+    else
+        return εF
+    end
 end
