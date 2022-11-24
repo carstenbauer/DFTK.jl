@@ -37,7 +37,7 @@ function compute_occupation(basis::PlaneWaveBasis{T}, eigenvalues,
         # Check there are enough bands
         max_n_electrons = (filled_occupation(basis.model)
                            * weighted_ksum(basis, length.(eigenvalues)))
-        if max_n_electrons < n_electrons - sqrt(eps(T))
+        if max_n_electrons < basis.model.n_electrons - sqrt(eps(T))
             error("Could not obtain required number of electrons by filling every state. " *
                   "Increase n_bands.")
         end
@@ -45,20 +45,19 @@ function compute_occupation(basis::PlaneWaveBasis{T}, eigenvalues,
         εF = compute_fermi_level(basis, eigenvalues, algorithm; temperature, smearing)
 
         # Sanity check on Fermi level
-        if deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature) < sqrt(eps(T))
+        deviation = deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature)
+        if abs(deviation) > sqrt(eps(T))
             if iszero(temperature)
                 error("Unable to find non-fractional occupations that have the " *
                       "correct number of electrons. You should add a temperature.")
             else
-                error("This should not happen, debug me!")
+                # TODO Do this properly
+                @warn "Large deviation from targeted electron count: $deviation"
             end
         end
     end
-    occupation = compute_occupation(basis, eigenvalues, εF; temperature, smearing)
-
-    (; occupation, εF)
+    compute_occupation(basis, eigenvalues, εF; temperature, smearing)
 end
-
 
 """Compute the occupations, given eigenenergies and a Fermi level"""
 function compute_occupation(basis::PlaneWaveBasis{T}, eigenvalues, εF::Number;
@@ -79,6 +78,10 @@ end
 
 function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::ZeroTemperature;
                              temperature=nothing, smearing=nothing) where {T}
+    filled_occ  = filled_occupation(basis.model)
+    n_electrons = basis.model.n_electrons
+    n_spin = basis.model.n_spin_components
+
     # Sanity check that we can indeed fill the appropriate number of states
     if n_electrons % (n_spin * filled_occ) != 0
         error("$n_electrons electrons cannot be attained by filling states with " *
@@ -106,7 +109,7 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::ZeroTemper
         end
 end
 
-function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues ::Bisection;
+function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::Bisection;
                              temperature, smearing) where {T}
     if iszero(temperature)
         return compute_fermi_level(basis, eigenvalues, ZeroTemperature())
@@ -123,8 +126,8 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues ::Bisection;
     Roots.find_zero(objective, (min_ε, max_ε), Roots.Bisection(), atol=eps(T))
 end
 
-function compute_fermi_level(basis::PlaneWaveBasis, eigenvalues ::GaussianNewton;
-                             temperature, smearing)
+function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::GaussianNewton;
+                             temperature, smearing) where {T}
     if iszero(temperature)
         return compute_fermi_level(basis, eigenvalues, ZeroTemperature())
     elseif smearing in (Smearing.Gaussian(), Smearing.FermiDirac())
@@ -135,7 +138,7 @@ function compute_fermi_level(basis::PlaneWaveBasis, eigenvalues ::GaussianNewton
     εF_guess = compute_fermi_level(basis, eigenvalues, Bisection();
                                    temperature, smearing=Smearing.Gaussian())
 
-    n_elec(εF)  = deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature)
-    dn_elec(εF) = ForwardDiff.derivative(objective, εF)
-    Roots.find_zero((n_elec, dn_elec), εF_guess, Newton())
+    deviation2(εF)  = abs2(deviation_n_electrons(basis, eigenvalues, εF; smearing, temperature))
+    ddeviation2(εF) = ForwardDiff.derivative(deviation2, εF)
+    εF_next = Roots.find_zero((deviation2, ddeviation2), εF_guess, Roots.Newton(), atol=eps(T))
 end
