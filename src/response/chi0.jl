@@ -328,9 +328,9 @@ function compute_δψ(basis, H, ψ, εF, ε, δHψ; ψ_extra=[zeros(size(ψk,1),
     δψ
 end
 
-@views @timing function apply_χ0_4P(ham, ψ, occ, εF, eigenvalues, δHψ;
+@views @timing function apply_χ0_4P(ham, ψ, occupation, εF, eigenvalues, δHψ;
                                     occupation_threshold, kwargs_sternheimer...)
-    basis  = ham.basis
+    basis = ham.basis
 
     # We first select orbitals with occupation number higher than
     # occupation_threshold for which we compute the associated response δψn,
@@ -338,9 +338,9 @@ end
     # We then use the extra information we have from these additional bands,
     # non-necessarily converged, to split the sternheimer_solver with a Schur
     # complement.
-
-    mask_occ   = map(occk -> isless.(occupation_threshold, occk), occ)
-    mask_extra = map(occk -> (!isless).(occupation_threshold, occk), occ)
+    occ_thresh = occupation_threshold
+    mask_occ   = map(occk -> findall(occnk -> abs(occnk) ≥ occ_thresh, occk), occupation)
+    mask_extra = map(occk -> findall(occnk -> abs(occnk) < occ_thresh, occk), occupation)
 
     ψ_occ   = [ψ[ik][:, maskk] for (ik, maskk) in enumerate(mask_occ)]
     ψ_extra = [ψ[ik][:, maskk] for (ik, maskk) in enumerate(mask_extra)]

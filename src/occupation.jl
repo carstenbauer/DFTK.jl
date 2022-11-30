@@ -244,7 +244,7 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, method::Ferm
         # Construct model for εF(α)
         grad = - g_α(αF, εF) / g_ε(αF, εF)
         hess = - grad * (g_εε(αF, εF) * grad + 2g_αε(αF, εF)) / g_ε(αF, εF)
-        model_εF     = α -> εF + grad * (α-αF) + hess * (α-αF)^2 / 2
+        model_εF = α -> εF + grad * (α-αF) + hess * (α-αF)^2 / 2
 
         # Find a range for which the model is valid
         α_trials = [α for α in range(0.1, 1.0, length=method.maxiter) if α > αF]

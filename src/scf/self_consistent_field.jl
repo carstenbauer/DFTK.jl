@@ -47,7 +47,7 @@ function next_density(ham::Hamiltonian,
               "`nbandsalg=AdaptiveBands(basis; n_bands_converge=$(n_bands_converge + 3)`)")
     end
 
-    ρout = compute_density(ham.basis, eigres.X, occupation)
+    ρout = compute_density(ham.basis, eigres.X, occupation; nbandsalg.occupation_threshold)
     (ψ=eigres.X, eigenvalues=eigres.λ, occupation, εF, ρout, diagonalization=eigres,
      n_bands_converge, nbandsalg.occupation_threshold)
 end
