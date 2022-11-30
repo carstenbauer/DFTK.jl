@@ -39,8 +39,8 @@ function check_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, εF; smearing,
     end
     dexcess < -sqrt(eps(T)) && @warn(
         "Negative electron versus Fermi level derivative encountered. Expect an unphysical " *
-        "(negative) density of states at εF. Try increasing the number of k-Points or " *
-        "switching to a different smearing function."
+        "(negative) density of states at εF. Try increasing the number of k-Points, " *
+        "decreasing the temperature or switching to a different smearing function."
     )
 end
 
