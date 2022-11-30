@@ -23,12 +23,32 @@ function excess_n_electrons(basis::PlaneWaveBasis, eigenvalues, εF; smearing, t
     weighted_ksum(basis, sum.(occupation)) - basis.model.n_electrons
 end
 
+function check_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, εF; smearing, temperature) where {T}
+    # Sanity check on Fermi level
+    excess = excess_n_electrons(basis, eigenvalues, εF; smearing, temperature)
+    dexcess = ForwardDiff.derivative(εF) do εF
+        excess_n_electrons(basis, eigenvalues, εF; smearing, temperature)
+    end
+    if abs(excess / basis.model.n_electrons) > sqrt(eps(T))
+        if iszero(temperature)
+            error("Unable to find non-fractional occupations that have the " *
+                  "correct number of electrons. You should add a temperature.")
+        else
+            error("This should not happen ... debug me.")
+        end
+    end
+    dexcess < -sqrt(eps(T)) && @warn(
+        "Negative electron versus Fermi level derivative encountered. Expect an unphysical " *
+        "(negative) density of states at εF. Try increasing the number of k-Points or " *
+        "switching to a different smearing function."
+    )
+end
 
 """
 Find the occupation and Fermi level.
 """
 function compute_occupation(basis::PlaneWaveBasis{T}, eigenvalues,
-                            algorithm::FermiLevelAlgorithm=GaussianNewton();
+                            algorithm::FermiLevelAlgorithm=FermiExtrapolation();
                             temperature=basis.model.temperature,
                             smearing=basis.model.smearing) where {T}
     if !isnothing(basis.model.εF)  # fixed Fermi level
@@ -42,18 +62,10 @@ function compute_occupation(basis::PlaneWaveBasis{T}, eigenvalues,
                   "Increase n_bands.")
         end
 
-        εF = compute_fermi_level(basis, eigenvalues, algorithm; temperature, smearing)
-
-        # Sanity check on Fermi level
-        excess = excess_n_electrons(basis, eigenvalues, εF; smearing, temperature)
-        if abs(excess / basis.model.n_electrons) > sqrt(eps(T))
-            if iszero(temperature)
-                error("Unable to find non-fractional occupations that have the " *
-                      "correct number of electrons. You should add a temperature.")
-            else
-                error("This should not happen ... debug me.")
-            end
+        @timing "compute_fermi_level" begin
+            εF = compute_fermi_level(basis, eigenvalues, algorithm; temperature, smearing)
         end
+        check_fermi_level(basis, eigenvalues, εF; smearing, temperature)
     end
     compute_occupation(basis, eigenvalues, εF; temperature, smearing)
 end
@@ -158,4 +170,108 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, ::GaussianNe
     else
         return εF
     end
+end
+
+# FermiExtrapolation works by extrapolating the Fermi level found using a monotonic smearing
+# (f₀) to the Fermi level of the desired smearing function f₁.
+#     g₀(εF) = ∑_i f₀((ε-εF) / T) - N
+#     g₁(εF) = ∑_i f₁((ε-εF) / T) - N
+#
+#     g(εF, α) = (1-α) g₀(εF) + g₁(εF)
+#
+# The constraint g(εF, α) = 0 defines an implicit function εF(α). By differentiating the
+# constraint twice we find εF' and εF''.
+#
+# 0 = dg/dα = (∂g/∂εF) (∂εF/∂α) + (∂g/∂α) (∂α/∂α)
+# thus
+#     grad = (∂εF/∂α) = - (∂g/∂εF)^{-1} * (∂g/∂α)
+#
+# 0 = d²g/d²α =   (∂/∂εF) [(∂g/∂εF) (∂εF/∂α) + (∂g/∂α)] (∂εF/∂α)
+#               + (∂/∂α)  [(∂g/∂εF) (∂εF/∂α) + (∂g/∂α)] (∂α/∂α)
+#             =   [(∂²g/∂²εF)  (∂εF/∂α) + (∂²g/∂α∂εF)] (∂εF/∂α)
+#               + [(∂²g/∂α∂εF) (∂εF/∂α) + (∂g/∂εF) (∂²εF/∂²α) + (∂²g/∂α²)]
+#             = [(∂²g/∂²εF) (∂εF/∂α) + 2 (∂²g/∂α∂εF)] (∂εF/∂α) + (∂g/∂εF) (∂²εF/∂²α)
+# since (∂²g/∂α²) = 0
+# thus
+#     hess = (∂²εF/∂²α) = - (∂g/∂εF)^{-1} (∂εF/∂α) [(∂²g/∂²εF) (∂εF/∂α) + 2 (∂²g/∂α∂εF)]
+# which makes up a model
+#     model(α) = εF₀ + δεF(α) = εF₀ + grad * (α - α₀) + 1/2 hess (α - α₀)^2
+#
+# To ensure the validity of the second-order model, we check that g(εF(α), α) does not get
+# too large.
+#
+Base.@kwdef struct FermiExtrapolation <: FermiLevelAlgorithm
+    maxiter = 10
+    occupation_tolerance = 1e-4
+    verbose = false
+end
+function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, method::FermiExtrapolation;
+                             temperature, smearing) where {T}
+    # Early exit ...
+    if iszero(temperature)
+        return compute_fermi_level(basis, eigenvalues, ZeroTemperature(); temperature, smearing)
+    elseif smearing isa Smearing.FermiDirac || smearing isa Smearing.Gaussian
+        return compute_fermi_level(basis, eigenvalues, Bisection(); temperature, smearing)
+    end
+
+    # The excess of electrons function and its derivatives
+    function g(α, εF)
+        ((1-α) * excess_n_electrons(basis, eigenvalues, εF;
+                                     smearing=Smearing.Gaussian(), temperature)
+         + α * excess_n_electrons(basis, eigenvalues, εF; smearing, temperature))
+    end
+    g_ε(α, εF)  = ForwardDiff.derivative(εF ->   g(α, εF), εF)
+    g_εε(α, εF) = ForwardDiff.derivative(εF -> g_ε(α, εF), εF)
+    g_α(α, εF)  = ForwardDiff.derivative(α  ->   g(α, εF), α)
+    g_αε(α, εF) = ForwardDiff.derivative(α  -> g_ε(α, εF), α)
+
+    # Compute a guess using a monotonic smearing
+    εF = compute_fermi_level(basis, eigenvalues, Bisection();
+                             temperature, smearing=Smearing.Gaussian())
+
+    if abs(g(1.0, εF) / basis.model.n_electrons) < sqrt(eps(T))
+        return εF  # Early exit
+    end
+
+    αF = 0.0
+    for i in 1:method.maxiter
+        if method.verbose && mpi_master()
+            println("")
+            println("-------  Iter $i -- αF=$αF εF=$εF --------")
+            println("")
+        end
+
+        # Construct model for εF(α)
+        grad = - g_α(αF, εF) / g_ε(αF, εF)
+        hess = - grad * (g_εε(αF, εF) * grad + 2g_αε(αF, εF)) / g_ε(αF, εF)
+        model_εF     = α -> εF + grad * (α-αF) + hess * (α-αF)^2 / 2
+
+        # Find a range for which the model is valid
+        α_trials = [α for α in range(0.1, 1.0, length=method.maxiter) if α > αF]
+        αF = α_trials[1]
+        for α_trial in α_trials
+            error = abs(g(α_trial, model_εF(α_trial)))
+            if error < method.occupation_tolerance
+                αF = α_trial
+            else
+                break
+            end
+        end
+        @assert 0.0 < αF ≤ 1.0
+        εF = model_εF(αF)
+
+        if isone(αF)
+            break
+        else
+            εF = Roots.find_zero(εF -> g(αF, εF), εF, Roots.Order0();
+                                 atol=method.occupation_tolerance / 10, method.verbose)
+        end
+    end
+
+    if method.verbose && mpi_master()
+        println("")
+        println("-------  Finish  εF=$εF --------")
+        println("")
+    end
+    Roots.find_zero(εF -> g(αF, εF), εF, Roots.Order0(); atol=eps(T), method.verbose)
 end
