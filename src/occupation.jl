@@ -201,9 +201,9 @@ end
 # too large.
 #
 Base.@kwdef struct FermiExtrapolation <: FermiLevelAlgorithm
-    maxiter = 10
-    occupation_tolerance = 1e-4
-    verbose = false
+    maxiter  = 10
+    modeltol = 1e-3
+    verbose  = false
 end
 function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, method::FermiExtrapolation;
                              temperature, smearing) where {T}
