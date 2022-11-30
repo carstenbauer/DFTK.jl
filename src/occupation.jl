@@ -250,21 +250,21 @@ function compute_fermi_level(basis::PlaneWaveBasis{T}, eigenvalues, method::Ferm
         α_trials = [α for α in range(0.1, 1.0, length=method.maxiter) if α > αF]
         αF = α_trials[1]
         for α_trial in α_trials
-            error = abs(g(α_trial, model_εF(α_trial)))
-            if error < method.occupation_tolerance
+            error = g(α_trial,   model_εF(α_trial))
+            deriv = g_ε(α_trial, model_εF(α_trial))
+            if abs(error) < method.modeltol && deriv > -method.modeltol
                 αF = α_trial
             else
                 break
             end
         end
-        @assert 0.0 < αF ≤ 1.0
-        εF = model_εF(αF)
 
-        if isone(αF)
-            break
-        else
+        εF = model_εF(αF)
+        if αF < 1.0
             εF = Roots.find_zero(εF -> g(αF, εF), εF, Roots.Order0();
-                                 atol=method.occupation_tolerance / 10, method.verbose)
+                                 atol=method.modeltol / 10, method.verbose)
+        else
+            break
         end
     end
 
